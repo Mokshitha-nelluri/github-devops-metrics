@@ -15,8 +15,28 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
-from django.urls import path
+from django.urls import path, include
+from django.http import JsonResponse
+
+def api_root(request):
+    """API root endpoint"""
+    return JsonResponse({
+        'message': 'GitHub DevOps Metrics API',
+        'version': '1.0',
+        'endpoints': {
+            'dashboard': '/api/v1/dashboard/',
+            'auth': '/api/v1/auth/',
+            'user': '/api/v1/user/',
+            'metrics': '/api/v1/metrics/',
+            'analytics': '/api/v1/analytics/',
+            'admin': '/admin/',
+        }
+    })
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/v1/', include('core.urls')),
+    path('api/v1/analytics/', include('analytics.urls')),
+    path('api/', api_root, name='api_root'),
+    path('', api_root, name='root'),
 ]
