@@ -11,7 +11,9 @@ from django.utils import timezone
 from django.db import transaction
 
 from core.models import User, UserRepository
-from core.services import DataService, GitHubService, MetricsService
+from core.services import DataService
+from analytics.github.enhanced_github_client import EnhancedGitHubClient
+from analytics.metrics.metrics_service import MetricsService
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +196,7 @@ class Command(BaseCommand):
                 return True
             
             # Initialize services
-            github_service = GitHubService(user.github_token)
+            github_service = EnhancedGitHubClient(user.github_token)
             metrics_service = MetricsService()
             data_service = DataService()
             

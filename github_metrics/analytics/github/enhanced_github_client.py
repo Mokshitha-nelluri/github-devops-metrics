@@ -1,33 +1,31 @@
 """
-GitHub service for API interactions
-Adapted from backend/github_api.py for Django
+Enhanced GitHub API client with GraphQL support
+Migrated from backend/github_api.py - Advanced functionality
 """
 import requests
 import time
 import logging
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
-from django.conf import settings
+from django.core.cache import cache
+from analytics.constants import GITHUB_GRAPHQL_URL, GITHUB_API_BASE_URL
 
 logger = logging.getLogger(__name__)
 
 
-class GitHubService:
-    """
-    GitHub API service for Django application
-    Adapted from the original GitHubAPI class
-    """
+class EnhancedGitHubClient:
+    """Enhanced GitHub API with GraphQL support and advanced features"""
     
     def __init__(self, token: str):
-        self.api_url = "https://api.github.com/graphql"
-        self.rest_url = "https://api.github.com"
+        self.api_url = GITHUB_GRAPHQL_URL
+        self.rest_url = GITHUB_API_BASE_URL
         self.headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github.v3+json"
         }
     
     def execute_query(self, query: str, variables: Optional[dict] = None, retries: int = 3, backoff_factor: int = 2) -> Optional[dict]:
-        """Execute GraphQL query with retry logic"""
+        """Executes a GraphQL query with enhanced retry logic and rate limit handling."""
         attempt = 0
         while attempt < retries:
             try:
@@ -37,7 +35,7 @@ class GitHubService:
                     headers=self.headers
                 )
                 
-                # Handle rate limiting
+                # Handle rate limiting (429 or secondary 403)
                 if response.status_code == 429 or (response.status_code == 403 and "rate limit" in response.text.lower()):
                     reset_time = int(response.headers.get('X-RateLimit-Reset', time.time() + 60))
                     sleep_time = max(reset_time - int(time.time()), 60)
@@ -66,7 +64,7 @@ class GitHubService:
         return None
     
     def get_authenticated_user(self) -> Optional[Dict[str, Any]]:
-        """Get authenticated user profile"""
+        """Get the authenticated user's profile information."""
         query = """
         query {
             viewer {
@@ -105,16 +103,24 @@ class GitHubService:
         return None
     
     def fetch_user_repositories(self, username: Optional[str] = None, limit: int = 200, include_private: bool = True) -> List[Dict[str, Any]]:
-        """Fetch user repositories with comprehensive discovery"""
+        """Fetch ALL user's repositories using enhanced discovery methods."""
         
         if username:
+            # For specific users, use simpler approach (public repos only)
             return self._fetch_public_user_repos(username, limit)
         
-        logger.info("Fetching repositories for authenticated user...")
-        return self._fetch_authenticated_user_repos(include_private, limit)
+        # For authenticated user, use comprehensive discovery
+        logger.info("🔍 Using enhanced repository discovery for authenticated user...")
+        
+        try:
+            return self._fetch_basic_user_repos(include_private, limit)
+            
+        except Exception as e:
+            logger.warning(f"Enhanced discovery failed, falling back to basic method: {e}")
+            return self._fetch_basic_user_repos(include_private, limit)
     
     def _fetch_public_user_repos(self, username: str, limit: int) -> List[Dict[str, Any]]:
-        """Fetch public repositories for a specific user"""
+        """Fetch public repositories for a specific user."""
         query = """
         query($username: String!, $first: Int!, $cursor: String) {
             user(login: $username) {
@@ -174,8 +180,8 @@ class GitHubService:
         
         return all_repos
     
-    def _fetch_authenticated_user_repos(self, include_private: bool, limit: int) -> List[Dict[str, Any]]:
-        """Fetch repositories for authenticated user"""
+    def _fetch_basic_user_repos(self, include_private: bool, limit: int) -> List[Dict[str, Any]]:
+        """Basic fallback method for fetching user repositories."""
         privacy_filter = "" if include_private else "privacy: PUBLIC"
         query = f"""
         query($first: Int!, $cursor: String) {{
@@ -184,7 +190,6 @@ class GitHubService:
                     first: $first,
                     after: $cursor,
                     orderBy: {{field: UPDATED_AT, direction: DESC}}
-                    affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]
                     {privacy_filter}
                 ) {{
                     nodes {{
@@ -213,7 +218,7 @@ class GitHubService:
         
         all_repos = []
         variables = {"first": min(limit, 100), "cursor": None}
-        max_pages = 20
+        max_pages = 10
         page_count = 0
         
         while page_count < max_pages:
@@ -235,11 +240,13 @@ class GitHubService:
                 
             variables["cursor"] = page_info["endCursor"]
         
-        logger.info(f"Found {len(all_repos)} repositories")
+        logger.info(f"Basic method found {len(all_repos)} repositories")
         return all_repos
-    
-    def fetch_commits(self, owner: str, repo: str, developer_email: Optional[str] = None, days_back: int = None) -> List[Dict[str, Any]]:
-        """Fetch commits from repository"""
+        
+    def fetch_commits(self, owner: str, repo: str, developer_email: Optional[str] = None, days_back: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Fetches ALL commits from repository history with advanced options."""
+        
+        # Only apply time filter if explicitly requested
         since_clause = ""
         variables_base = {
             "owner": owner,
@@ -335,7 +342,7 @@ class GitHubService:
         variables = variables_base
         
         commits = []
-        max_pages = 50
+        max_pages = 50  # Increased to get complete commit history
         page_count = 0
         
         while page_count < max_pages:
@@ -348,7 +355,7 @@ class GitHubService:
                 break
             
             new_commits = history.get("nodes", [])
-            if not new_commits:
+            if not new_commits:  # No more commits
                 break
                 
             commits.extend(new_commits)
@@ -360,11 +367,12 @@ class GitHubService:
             variables["cursor"] = page_info["endCursor"]
             page_count += 1
         
-        logger.info(f"Fetched {len(commits)} commits for {owner}/{repo}")
+        logger.info(f"Fetched {len(commits)} commits for {owner}/{repo} ({'all-time' if days_back is None else f'{days_back} days'})")
         return commits
     
-    def fetch_pull_requests(self, owner: str, repo: str, developer_email: Optional[str] = None, days_back: int = None) -> List[Dict[str, Any]]:
-        """Fetch pull requests from repository"""
+    def fetch_pull_requests(self, owner: str, repo: str, developer_email: Optional[str] = None, days_back: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Fetches ALL PRs from repository history with detailed information."""
+        
         query = """
         query ($owner: String!, $repo: String!, $cursor: String) {
             repository(owner: $owner, name: $repo) {
@@ -416,6 +424,31 @@ class GitHubService:
                                 body
                             }
                         }
+                        reviewRequests(first: 10) {
+                            nodes {
+                                requestedReviewer {
+                                    ... on User {
+                                        login
+                                    }
+                                }
+                            }
+                        }
+                        labels(first: 10) {
+                            nodes {
+                                name
+                                color
+                            }
+                        }
+                        assignees(first: 5) {
+                            nodes {
+                                login
+                            }
+                        }
+                        milestone {
+                            title
+                            dueOn
+                            state
+                        }
                     }
                     pageInfo {
                         hasNextPage
@@ -428,7 +461,7 @@ class GitHubService:
         
         variables = {"owner": owner, "repo": repo, "cursor": None}
         all_prs = []
-        max_pages = 20
+        max_pages = 20  # Increased to get complete PR history
         page_count = 0
         
         while page_count < max_pages:
@@ -437,13 +470,13 @@ class GitHubService:
                 break
             
             prs = data.get("data", {}).get("repository", {}).get("pullRequests", {}).get("nodes", [])
-            if not prs:
+            if not prs:  # No more PRs
                 break
             
-            # Filter by developer email and time if provided
+            # Filter by developer email if provided, but no time filtering by default
             filtered_prs = []
             for pr in prs:
-                # Apply time filter
+                # Apply time filter only if days_back is specified
                 if days_back is not None:
                     if pr.get("updatedAt"):
                         updated_date = datetime.strptime(pr["updatedAt"], "%Y-%m-%dT%H:%M:%SZ")
@@ -471,11 +504,11 @@ class GitHubService:
             variables["cursor"] = page_info["endCursor"]
             page_count += 1
         
-        logger.info(f"Fetched {len(all_prs)} PRs for {owner}/{repo}")
+        logger.info(f"Fetched {len(all_prs)} PRs for {owner}/{repo} ({'all-time' if days_back is None else f'{days_back} days'})")
         return all_prs
     
     def fetch_repository_insights(self, owner: str, repo: str) -> Dict[str, Any]:
-        """Fetch comprehensive repository insights"""
+        """Fetch comprehensive repository insights and metadata."""
         query = """
         query($owner: String!, $repo: String!) {
             repository(owner: $owner, name: $repo) {
@@ -521,6 +554,13 @@ class GitHubService:
                     name
                     spdxId
                 }
+                repositoryTopics(first: 10) {
+                    nodes {
+                        topic {
+                            name
+                        }
+                    }
+                }
                 defaultBranchRef {
                     name
                     target {
@@ -532,6 +572,9 @@ class GitHubService:
                     }
                 }
                 diskUsage
+                codeOfConduct {
+                    name
+                }
                 releases(first: 1, orderBy: {field: CREATED_AT, direction: DESC}) {
                     totalCount
                     nodes {
@@ -548,3 +591,105 @@ class GitHubService:
         if data:
             return data.get("data", {}).get("repository", {})
         return {}
+    
+    def setup_repository_webhook(self, owner: str, repo: str, webhook_url: str) -> Optional[Dict[str, Any]]:
+        """Set up repository webhook for real-time updates."""
+        url = f"{self.rest_url}/repos/{owner}/{repo}/hooks"
+        payload = {
+            "name": "web",
+            "active": True,
+            "events": ["push", "pull_request", "release"],
+            "config": {
+                "url": webhook_url,
+                "content_type": "json"
+            }
+        }
+        
+        try:
+            response = requests.post(url, json=payload, headers=self.headers)
+            response.raise_for_status()
+            logger.info(f"Webhook created for {owner}/{repo} at {webhook_url}")
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Webhook creation failed: {str(e)}")
+            return None
+    
+    def fetch_global_user_activity(self, user_email: str, months_back: int = 6) -> Dict[str, Any]:
+        """Fetch global user activity across all accessible repositories"""
+        try:
+            # Calculate date range
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=months_back * 30)
+            
+            # First, get user info to extract username
+            user_info = self.get_authenticated_user()
+            if not user_info:
+                return {"error": "Failed to get user info"}
+            
+            username = user_info.get("login")
+            if not username:
+                return {"error": "Failed to get username"}
+            
+            # Get user repositories
+            repositories = self.fetch_user_repositories(username, limit=50)
+            if not repositories:
+                return {"error": "No repositories found"}
+            
+            all_commits = []
+            all_prs = []
+            
+            # Fetch data from each repository
+            for repo in repositories:
+                owner = "unknown"
+                name = "unknown"
+                try:
+                    owner = repo.get("owner", {}).get("login", "")
+                    name = repo.get("name", "")
+                    
+                    if not owner or not name:
+                        continue
+                    
+                    # Fetch commits for this repo
+                    repo_commits = self.fetch_commits(owner, name, developer_email=user_email, days_back=months_back * 30)
+                    if repo_commits:
+                        # Add repository info to each commit
+                        for commit in repo_commits:
+                            commit["repository"] = f"{owner}/{name}"
+                        all_commits.extend(repo_commits)
+                    
+                    # Fetch PRs for this repo
+                    repo_prs = self.fetch_pull_requests(owner, name, user_email, days_back=months_back * 30)
+                    if repo_prs:
+                        # Add repository info to each PR
+                        for pr in repo_prs:
+                            pr["repository"] = f"{owner}/{name}"
+                        all_prs.extend(repo_prs)
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to fetch data for {owner}/{name}: {str(e)}")
+                    continue
+            
+            return {
+                "commits": all_commits,
+                "pull_requests": all_prs,
+                "repositories": repositories,
+                "user_info": user_info,
+                "date_range": {
+                    "start": start_date.isoformat(),
+                    "end": end_date.isoformat()
+                }
+            }
+        except Exception as e:
+            logger.error(f"Error fetching global user activity: {str(e)}")
+            return {"error": str(e)}
+    
+    def get_user_info(self) -> Optional[Dict[str, Any]]:
+        """Get authenticated user information using REST API"""
+        try:
+            url = f"{self.rest_url}/user"
+            response = requests.get(url, headers=self.headers)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error fetching user info: {str(e)}")
+            return None

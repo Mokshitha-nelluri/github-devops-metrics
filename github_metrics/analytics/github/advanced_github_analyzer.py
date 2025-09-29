@@ -8,7 +8,7 @@ from collections import defaultdict, Counter
 from datetime import datetime, timedelta
 import statistics
 
-from core.services import GitHubService
+from .enhanced_github_client import EnhancedGitHubClient
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +19,8 @@ class AdvancedGitHubAnalyzer:
     Focuses on patterns, insights, and advanced metrics
     """
     
-    def __init__(self, github_service: GitHubService):
-        self.github_service = github_service
+    def __init__(self, github_client: EnhancedGitHubClient):
+        self.github_client = github_client
     
     def analyze_repository_ecosystem(self, owner: str, repo: str) -> Dict[str, Any]:
         """
@@ -28,11 +28,11 @@ class AdvancedGitHubAnalyzer:
         """
         try:
             # Get repository insights
-            repo_insights = self.github_service.fetch_repository_insights(owner, repo)
+            repo_insights = self.github_client.fetch_repository_insights(owner, repo)
             
             # Get commits and PRs for analysis
-            commits = self.github_service.fetch_commits(owner, repo, days_back=90)
-            prs = self.github_service.fetch_pull_requests(owner, repo, days_back=90)
+            commits = self.github_client.fetch_commits(owner, repo, days_back=90)
+            prs = self.github_client.fetch_pull_requests(owner, repo, days_back=90)
             
             analysis = {
                 'repository_health': self._analyze_repository_health(repo_insights, commits, prs),
@@ -193,7 +193,7 @@ class AdvancedGitHubAnalyzer:
             'avg_prs_per_week': round(avg_prs_per_week, 2),
             'commit_consistency_score': round(commit_consistency * 100, 2),
             'pr_consistency_score': round(pr_consistency * 100, 2),
-            'velocity_trend': self._calculate_trend(commit_counts[-4:]) if len(commit_counts) >= 4 else 'stable',
+            'velocity_trend': self._calculate_trend([float(x) for x in commit_counts[-4:]]) if len(commit_counts) >= 4 else 'stable',
             'weekly_patterns': {
                 'commits': dict(weekly_commits),
                 'prs': dict(weekly_prs)

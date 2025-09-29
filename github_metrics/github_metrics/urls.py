@@ -28,7 +28,6 @@ def api_root(request):
             'auth': '/api/v1/auth/',
             'user': '/api/v1/user/',
             'metrics': '/api/v1/metrics/',
-            'analytics': '/api/v1/analytics/',
             'admin': '/admin/',
         }
     })
@@ -36,7 +35,6 @@ def api_root(request):
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/v1/', include('core.urls')),
-    path('api/v1/analytics/', include('analytics.urls')),
     path('api/', api_root, name='api_root'),
     path('', api_root, name='root'),
 ]

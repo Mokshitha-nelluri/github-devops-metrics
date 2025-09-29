@@ -7,7 +7,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 
-from core.services import DataService, GitHubService
+from core.services import DataService
+from analytics.github.enhanced_github_client import EnhancedGitHubClient
 from core.models import User
 
 logger = logging.getLogger(__name__)

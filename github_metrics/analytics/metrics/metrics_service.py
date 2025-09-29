@@ -74,17 +74,20 @@ class MetricsService:
         return metrics
     
     def calculate_dora_metrics(self, commits: List[Dict], pull_requests: List[Dict]) -> Dict[str, Any]:
-        """Calculate DORA metrics"""
+        """Calculate advanced DORA metrics with detailed breakdown"""
         return {
-            "lead_time": self._calculate_lead_time(pull_requests),
-            "deployment_frequency": self._calculate_deployment_frequency(pull_requests),
-            "change_failure_rate": self._calculate_failure_rate(pull_requests, commits),
-            "mttr": self._calculate_mttr(pull_requests, commits)
+            "lead_time": self._calculate_detailed_lead_time(pull_requests),
+            "deployment_frequency": self._calculate_enhanced_deployment_frequency(pull_requests),
+            "change_failure_rate": self._calculate_enhanced_failure_rate(pull_requests, commits),
+            "mttr": self._calculate_enhanced_mttr(pull_requests, commits)
         }
     
-    def _calculate_lead_time(self, pull_requests: List[Dict]) -> Dict[str, Any]:
-        """Calculate lead time metrics"""
+    def _calculate_detailed_lead_time(self, pull_requests: List[Dict]) -> Dict[str, Any]:
+        """Calculate detailed lead time breakdown."""
         lead_times = []
+        code_times = []  # Time from first commit to PR creation
+        review_times = []  # Time from PR creation to first review
+        merge_times = []  # Time from last review to merge
         
         for pr in pull_requests:
             if not pr.get("mergedAt"):
@@ -94,9 +97,49 @@ class MetricsService:
                 created_at = self._parse_date(pr["createdAt"])
                 merged_at = self._parse_date(pr["mergedAt"])
                 
-                lead_time = (merged_at - created_at).total_seconds()
-                if lead_time >= 0:
-                    lead_times.append(lead_time)
+                # Get commit dates
+                commits = pr.get("commits", {}).get("nodes", [])
+                if commits:
+                    commit_dates = [
+                        self._parse_date(commit["commit"]["committedDate"])
+                        for commit in commits
+                        if commit.get("commit", {}).get("committedDate")
+                    ]
+                    
+                    if commit_dates:
+                        first_commit = min(commit_dates)
+                        
+                        # Code time: first commit to PR creation
+                        code_time = (created_at - first_commit).total_seconds()
+                        if code_time >= 0:
+                            code_times.append(code_time)
+                        
+                        # Total lead time: first commit to merge
+                        total_lead_time = (merged_at - first_commit).total_seconds()
+                        if total_lead_time >= 0:
+                            lead_times.append(total_lead_time)
+                        
+                        # Review time: PR creation to first review
+                        reviews = pr.get("reviews", {}).get("nodes", [])
+                        if reviews:
+                            review_dates = [
+                                self._parse_date(review["submittedAt"])
+                                for review in reviews
+                                if review.get("submittedAt")
+                            ]
+                            
+                            if review_dates:
+                                first_review = min(review_dates)
+                                review_time = (first_review - created_at).total_seconds()
+                                if review_time >= 0:
+                                    review_times.append(review_time)
+                                
+                                # Merge time: last review to merge
+                                last_review = max(review_dates)
+                                merge_time = (merged_at - last_review).total_seconds()
+                                if merge_time >= 0:
+                                    merge_times.append(merge_time)
+                
             except Exception as e:
                 logger.warning(f"Failed to calculate lead time for PR: {e}")
                 continue
@@ -104,6 +147,12 @@ class MetricsService:
         return {
             "total_lead_time_sec": self._average(lead_times),
             "total_lead_time_hours": self._average(lead_times) / 3600 if lead_times else 0,
+            "code_time_sec": self._average(code_times),
+            "code_time_hours": self._average(code_times) / 3600 if code_times else 0,
+            "review_time_sec": self._average(review_times),
+            "review_time_hours": self._average(review_times) / 3600 if review_times else 0,
+            "merge_time_sec": self._average(merge_times),
+            "merge_time_hours": self._average(merge_times) / 3600 if merge_times else 0,
             "p50_lead_time_hours": self._percentile(lead_times, 50) / 3600 if lead_times else 0,
             "p90_lead_time_hours": self._percentile(lead_times, 90) / 3600 if lead_times else 0,
             "p95_lead_time_hours": self._percentile(lead_times, 95) / 3600 if lead_times else 0
@@ -254,8 +303,8 @@ class MetricsService:
             "commits_by_hour": dict(hour_counts),
             "weekend_work_percentage": round(weekend_percentage, 2),
             "late_night_work_percentage": round(late_night_percentage, 2),
-            "most_productive_day": max(day_counts, key=day_counts.get) if day_counts else None,
-            "most_productive_hour": max(hour_counts, key=hour_counts.get) if hour_counts else None,
+            "most_productive_day": max(day_counts.keys(), key=lambda x: day_counts[x]) if day_counts else None,
+            "most_productive_hour": max(hour_counts.keys(), key=lambda x: hour_counts[x]) if hour_counts else None,
             "work_life_balance_score": max(0, 100 - weekend_percentage - late_night_percentage)
         }
     
@@ -410,3 +459,159 @@ class MetricsService:
     def _percentile(self, values: List[float], percentile: int) -> float:
         """Return the given percentile of a list of values"""
         return float(np.percentile(values, percentile)) if values else 0.0
+    
+    def _calculate_enhanced_deployment_frequency(self, pull_requests: List[Dict]) -> Dict[str, Any]:
+        """Calculate deployment frequency with enhanced trends and analytics."""
+        if not pull_requests:
+            return {
+                "per_week": 0,
+                "per_day": 0,
+                "weekly_trend": {}
+            }
+        
+        # Group by week and day
+        weekly_deployments = defaultdict(int)
+        daily_deployments = defaultdict(int)
+        
+        for pr in pull_requests:
+            if pr.get("mergedAt"):
+                try:
+                    merge_date = self._parse_date(pr["mergedAt"])
+                    week_key = merge_date.strftime("%Y-W%U")
+                    day_key = merge_date.strftime("%Y-%m-%d")
+                    weekly_deployments[week_key] += 1
+                    daily_deployments[day_key] += 1
+                except Exception as e:
+                    logger.warning(f"Failed to parse merge date: {e}")
+                    continue
+        
+        # Calculate averages
+        avg_per_week = sum(weekly_deployments.values()) / len(weekly_deployments) if weekly_deployments else 0
+        avg_per_day = sum(daily_deployments.values()) / len(daily_deployments) if daily_deployments else 0
+        
+        # Calculate trend (last 4 weeks vs previous 4 weeks)
+        sorted_weeks = sorted(weekly_deployments.keys())
+        trend = "stable"
+        
+        if len(sorted_weeks) >= 8:
+            recent_weeks = sorted_weeks[-4:]
+            previous_weeks = sorted_weeks[-8:-4]
+            recent_avg = sum(weekly_deployments[week] for week in recent_weeks) / 4
+            previous_avg = sum(weekly_deployments[week] for week in previous_weeks) / 4
+            
+            if recent_avg > previous_avg * 1.2:
+                trend = "increasing"
+            elif recent_avg < previous_avg * 0.8:
+                trend = "decreasing"
+        
+        return {
+            "per_week": round(avg_per_week, 2),
+            "per_day": round(avg_per_day, 2),
+            "weekly_trend": dict(weekly_deployments),
+            "daily_trend": dict(daily_deployments),
+            "trend_direction": trend,
+            "total_deployments": len([pr for pr in pull_requests if pr.get("mergedAt")])
+        }
+    
+    def _calculate_enhanced_failure_rate(self, pull_requests: List[Dict], commits: List[Dict]) -> Dict[str, Any]:
+        """Calculate enhanced change failure rate with detailed analysis."""
+        if not pull_requests:
+            return {
+                "percentage": 0,
+                "failure_types": {},
+                "hotfix_count": 0
+            }
+        
+        failure_indicators = {
+            "revert": ["revert", "rollback", "undo"],
+            "hotfix": ["hotfix", "emergency", "urgent", "critical"],
+            "bugfix": ["fix", "bug", "issue", "broken", "error"],
+            "patch": ["patch", "quick fix", "band-aid"]
+        }
+        
+        failure_counts = defaultdict(int)
+        total_failures = 0
+        failed_prs = []
+        
+        for pr in pull_requests:
+            if not pr.get("mergedAt"):
+                continue
+            
+            title = pr.get("title", "").lower()
+            body = pr.get("body", "").lower()
+            is_failure = False
+            failure_type = None
+            
+            # Check PR title and body for failure indicators
+            for f_type, keywords in failure_indicators.items():
+                if any(keyword in title or keyword in body for keyword in keywords):
+                    failure_counts[f_type] += 1
+                    total_failures += 1
+                    is_failure = True
+                    failure_type = f_type
+                    break
+            
+            if is_failure:
+                failed_prs.append({
+                    "number": pr.get("number"),
+                    "title": pr.get("title"),
+                    "type": failure_type,
+                    "merged_at": pr.get("mergedAt")
+                })
+        
+        # Also check commits for failure patterns
+        hotfix_commits = 0
+        for commit in commits[-50:]:  # Check recent commits
+            message = commit.get("message", "").lower()
+            if any(keyword in message for keyword in failure_indicators["hotfix"]):
+                hotfix_commits += 1
+        
+        failure_rate = (total_failures / len(pull_requests)) * 100 if pull_requests else 0
+        
+        return {
+            "percentage": round(failure_rate, 2),
+            "failure_types": dict(failure_counts),
+            "hotfix_count": hotfix_commits,
+            "failed_prs": failed_prs,
+            "total_failures": total_failures,
+            "total_prs": len(pull_requests)
+        }
+    
+    def _calculate_enhanced_mttr(self, pull_requests: List[Dict], commits: List[Dict]) -> Dict[str, Any]:
+        """Calculate Enhanced Mean Time to Recovery."""
+        recovery_times = []
+        
+        # Look for pairs of failure and fix PRs
+        sorted_prs = sorted(
+            [pr for pr in pull_requests if pr.get("mergedAt")],
+            key=lambda x: self._parse_date(x["mergedAt"])
+        )
+        
+        failure_keywords = ["bug", "fix", "issue", "broken", "error", "hotfix"]
+        
+        for i, pr in enumerate(sorted_prs):
+            title = pr.get("title", "").lower()
+            
+            # If this is a fix PR, look for the original issue
+            if any(keyword in title for keyword in failure_keywords):
+                # Look back for potential failure point
+                failure_time = None
+                fix_time = self._parse_date(pr["mergedAt"])
+                
+                # Simple heuristic: assume failure happened at previous deployment
+                if i > 0:
+                    failure_time = self._parse_date(sorted_prs[i-1]["mergedAt"])
+                    recovery_time = (fix_time - failure_time).total_seconds()
+                    if recovery_time > 0:
+                        recovery_times.append(recovery_time)
+        
+        avg_mttr = self._average(recovery_times) if recovery_times else 0
+        
+        return {
+            "mttr_sec": avg_mttr,
+            "mttr_hours": avg_mttr / 3600 if avg_mttr else 0,
+            "mttr_days": avg_mttr / 86400 if avg_mttr else 0,
+            "recovery_incidents": len(recovery_times),
+            "p50_mttr_hours": self._percentile(recovery_times, 50) / 3600 if recovery_times else 0,
+            "p90_mttr_hours": self._percentile(recovery_times, 90) / 3600 if recovery_times else 0
+        }

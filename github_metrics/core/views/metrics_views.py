@@ -7,10 +7,12 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 
-from core.services import DataService, GitHubService, MetricsService
+from core.services import DataService
 from core.models import User
-from analytics.ml import MLService
-from analytics.ai_summary import SummaryService
+from analytics.ml.ml_analyzer import MLService
+from analytics.ai_assist.summary_bot import SummaryService
+from analytics.github.enhanced_github_client import EnhancedGitHubClient
+from analytics.metrics.metrics_service import MetricsService
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +41,10 @@ class CalculateMetricsView(APIView):
                 }, status=400)
             
             # Initialize services
-            github_service = GitHubService(user.github_token)
+            github_client = EnhancedGitHubClient(user.github_token)
             metrics_service = MetricsService()
+            github_service = EnhancedGitHubClient(user.github_token)
+            data_service = DataService()
             data_service = DataService()
             
             if repo_full_name:
